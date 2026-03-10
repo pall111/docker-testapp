@@ -1,0 +1,63 @@
+# Node.js App Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: testapp
+  namespace: testapp-ns
+  labels:
+    app: testapp
+spec:
+  replicas: 2                   # 2 pods — if one dies, the other keeps serving
+  selector:
+    matchLabels:
+      app: testapp
+  template:
+    metadata:
+      labels:
+        app: testapp
+    spec:
+      containers:
+        - name: testapp
+          image: pallavi3110/pallavisrepo:3.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5050
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: PORT
+              value: "5050"
+            - name: MONGO_URL
+              value: "mongodb://mongo-service:27017"
+          # Readiness: only send traffic once the app is up
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5050
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          # Liveness: restart container if it becomes unresponsive
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5050
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+---
+# Node.js Service (NodePort - accessible from outside cluster)
+apiVersion: v1
+kind: Service
+metadata:
+  name: testapp
+  namespace: testapp-ns
+spec:
+  selector:
+    app: testapp
+  type: NodePort
+  ports:
+    - protocol: TCP
+      port: 5050
+      targetPort: 5050
+      nodePort: 30051
+

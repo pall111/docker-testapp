@@ -1,0 +1,114 @@
+# ── MongoDB HA: 3-node Replica Set using StatefulSet ──────────────────────────
+#
+# Architecture:
+#   mongo-0  →  Primary   (reads + writes)
+#   mongo-1  →  Secondary (live sync, auto-promoted if primary dies)
+#   mongo-2  →  Secondary (extra redundancy)
+#
+# After applying, initialize the replica set once:
+#   kubectl exec -it mongo-0 -n testapp-ns -- mongosh --eval "
+#     rs.initiate({
+#       _id: 'rs0',
+#       members: [
+#         { _id: 0, host: 'mongo-0.mongo-headless:27017' },
+#         { _id: 1, host: 'mongo-1.mongo-headless:27017' },
+#         { _id: 2, host: 'mongo-2.mongo-headless:27017' }
+#       ]
+#     })"
+#
+# Connection string in server.js for replica set:
+#   mongodb://mongo-0.mongo-headless:27017,mongo-1.mongo-headless:27017,mongo-2.mongo-headless:27017/?replicaSet=rs0
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Headless Service — gives each pod a stable DNS name
+# mongo-0.mongo-headless.testapp-ns.svc.cluster.local
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo-headless
+  namespace: testapp-ns
+  labels:
+    app: mongo
+spec:
+  clusterIP: None          # headless — no load balancing, direct pod DNS
+  selector:
+    app: mongo
+  ports:
+    - port: 27017
+      targetPort: 27017
+
+---
+# ClusterIP Service for single-node access (used by testapp for simple setup)
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo-service
+  namespace: testapp-ns
+spec:
+  selector:
+    app: mongo
+  ports:
+    - port: 27017
+      targetPort: 27017
+  type: ClusterIP
+
+---
+# StatefulSet — 3 MongoDB pods with persistent storage each
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongo
+  namespace: testapp-ns
+spec:
+  serviceName: "mongo-headless"
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mongo
+  template:
+    metadata:
+      labels:
+        app: mongo
+    spec:
+      containers:
+        - name: mongo
+          image: mongo:6
+          command:
+            - mongod
+            - "--replSet"
+            - "rs0"
+            - "--bind_ip_all"
+          ports:
+            - containerPort: 27017
+          env:
+            - name: MONGO_INITDB_ROOT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: mongo-secret
+                  key: username
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mongo-secret
+                  key: password
+          # Liveness: restart pod if mongo stops responding
+          livenessProbe:
+            exec:
+              command: ["mongosh", "--eval", "db.adminCommand('ping')"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          # Persistent storage per pod — data survives pod restarts
+          volumeMounts:
+            - name: mongo-data
+              mountPath: /data/db
+
+  # Each pod gets its own 1Gi PersistentVolumeClaim
+  volumeClaimTemplates:
+    - metadata:
+        name: mongo-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

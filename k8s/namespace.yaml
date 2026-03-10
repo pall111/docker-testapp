@@ -1,0 +1,8 @@
+# Isolated namespace for the entire application stack
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: testapp-ns
+  labels:
+    team: pallavi
+    environment: development
